@@ -11,10 +11,32 @@ from typing import IO, Mapping, MutableSequence, Optional, Sequence, Union
 
 
 def as_command_list(command: Union[str, Sequence[str]]) -> Sequence[str]:
-    """Convert command specifications from TOML into a tokenized list."""
+    """
+    Convert command specifications from TOML into a tokenized list.
+
+    Parameters
+    ----------
+    command : str or Sequence[str]
+        Command specification as a string or list of tokens.
+
+    Returns
+    -------
+    Sequence[str]
+        Tokenized command list.
+
+    Raises
+    ------
+    ValueError
+        If command is neither a string nor an iterable sequence.
+    """
     if isinstance(command, str):
         return shlex.split(command)
-    return [str(token) for token in command]
+    try:
+        return [str(token) for token in command]
+    except TypeError:
+        raise ValueError(
+            f"command must be a string or iterable sequence, got {type(command).__name__}"
+        )
 
 
 def _replace_placeholders(token: str, input_path: Path, output_path: Path) -> str:
