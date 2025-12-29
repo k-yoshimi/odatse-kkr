@@ -14,17 +14,293 @@ from typing import Dict, List, Optional, Tuple, Union
 
 __all__ = [
     "add_atom_type_definition",
+    "apply_kkr_parameters_from_config",
     "count_atoms_by_type",
     "list_atomic_positions",
     "load_input_file",
     "modify_atom_type_definition",
+    "modify_kkr_parameters",
     "parse_atomic_positions",
     "parse_atom_type_definitions",
+    "parse_kkr_parameters",
     "replace_atom_types",
     "replace_atom_types_by_coordinates",
     "replace_atom_types_by_label",
     "write_input_file",
 ]
+
+
+def parse_kkr_parameters(input_lines: List[str]) -> Dict:
+    """
+    Extract KKR calculation parameters from an AkaiKKR input file.
+
+    This function parses the header section of an AkaiKKR input file and
+    extracts lattice parameters, calculation parameters, and output settings.
+
+    Parameters
+    ----------
+    input_lines : list of str
+        Lines of the input file.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - lattice: dict with brvtyp, a, c_a, b_a, alpha, beta, gamma
+        - calculation: dict with edelt, ewidth, reltyp, sdftyp, magtyp, record
+        - output: dict with outtyp, bzqlty, maxitr, pmix
+        - go: dict with command, pot_file (first line parameters)
+        - line_indices: dict mapping parameter names to line indices
+    """
+    result: Dict = {
+        "lattice": {},
+        "calculation": {},
+        "output": {},
+        "go": {},
+        "line_indices": {},
+    }
+
+    i = 0
+    while i < len(input_lines):
+        line = input_lines[i].strip()
+
+        # Parse "go" line (first command line)
+        if line.startswith("go"):
+            parts = line.split()
+            if len(parts) >= 2:
+                result["go"]["command"] = parts[0]
+                result["go"]["pot_file"] = parts[1]
+            result["line_indices"]["go"] = i
+            i += 1
+            continue
+
+        # Parse lattice parameters (brvtyp a c/a b/a alpha beta gamma)
+        if "brvtyp" in line.lower() and line.startswith("c"):
+            i += 1
+            while i < len(input_lines):
+                next_line = input_lines[i].strip()
+                if next_line and not next_line.startswith("c"):
+                    parts = next_line.split()
+                    if len(parts) >= 7:
+                        result["lattice"]["brvtyp"] = parts[0]
+                        result["lattice"]["a"] = float(parts[1])
+                        result["lattice"]["c_a"] = float(parts[2])
+                        result["lattice"]["b_a"] = float(parts[3])
+                        result["lattice"]["alpha"] = float(parts[4])
+                        result["lattice"]["beta"] = float(parts[5])
+                        result["lattice"]["gamma"] = float(parts[6])
+                        result["line_indices"]["lattice"] = i
+                    break
+                i += 1
+            i += 1
+            continue
+
+        # Parse calculation parameters (edelt ewidth reltyp sdftyp magtyp record)
+        if "edelt" in line.lower() and line.startswith("c"):
+            i += 1
+            while i < len(input_lines):
+                next_line = input_lines[i].strip()
+                if next_line and not next_line.startswith("c"):
+                    parts = next_line.split()
+                    if len(parts) >= 6:
+                        result["calculation"]["edelt"] = float(parts[0])
+                        result["calculation"]["ewidth"] = float(parts[1])
+                        result["calculation"]["reltyp"] = parts[2]
+                        result["calculation"]["sdftyp"] = parts[3]
+                        result["calculation"]["magtyp"] = parts[4]
+                        result["calculation"]["record"] = parts[5]
+                        result["line_indices"]["calculation"] = i
+                    break
+                i += 1
+            i += 1
+            continue
+
+        # Parse output parameters (outtyp bzqlty maxitr pmix)
+        if "outtyp" in line.lower() and line.startswith("c"):
+            i += 1
+            while i < len(input_lines):
+                next_line = input_lines[i].strip()
+                if next_line and not next_line.startswith("c"):
+                    parts = next_line.split()
+                    if len(parts) >= 4:
+                        result["output"]["outtyp"] = parts[0]
+                        result["output"]["bzqlty"] = int(parts[1])
+                        result["output"]["maxitr"] = int(parts[2])
+                        result["output"]["pmix"] = float(parts[3])
+                        result["line_indices"]["output"] = i
+                    break
+                i += 1
+            i += 1
+            continue
+
+        # Stop parsing when we reach ntyp section
+        if "ntyp" in line.lower():
+            break
+
+        i += 1
+
+    return result
+
+
+def modify_kkr_parameters(
+    input_data: Dict,
+    lattice: Optional[Dict] = None,
+    calculation: Optional[Dict] = None,
+    output: Optional[Dict] = None,
+    go: Optional[Dict] = None,
+) -> Dict:
+    """
+    Modify KKR parameters in structured input data.
+
+    Parameters
+    ----------
+    input_data : dict
+        Structured data from load_input_file().
+    lattice : dict, optional
+        Lattice parameters to update. Keys: brvtyp, a, c_a, b_a, alpha, beta, gamma.
+    calculation : dict, optional
+        Calculation parameters to update. Keys: edelt, ewidth, reltyp, sdftyp,
+        magtyp, record.
+    output : dict, optional
+        Output parameters to update. Keys: outtyp, bzqlty, maxitr, pmix.
+    go : dict, optional
+        Go command parameters. Keys: command, pot_file.
+
+    Returns
+    -------
+    dict
+        New structured data with updated parameters.
+
+    Examples
+    --------
+    >>> data = load_input_file("template.in")
+    >>> new_data = modify_kkr_parameters(
+    ...     data,
+    ...     lattice={"a": 7.5, "c_a": 3.1},
+    ...     calculation={"edelt": 0.0005, "maxitr": 300}
+    ... )
+    >>> write_input_file(new_data, "modified.in")
+    """
+    new_data = _copy_base(input_data)
+
+    # Copy KKR parameters if they exist
+    if "kkr_parameters" in input_data:
+        new_data["kkr_parameters"] = {
+            "lattice": input_data["kkr_parameters"].get("lattice", {}).copy(),
+            "calculation": input_data["kkr_parameters"].get("calculation", {}).copy(),
+            "output": input_data["kkr_parameters"].get("output", {}).copy(),
+            "go": input_data["kkr_parameters"].get("go", {}).copy(),
+            "line_indices": input_data["kkr_parameters"].get("line_indices", {}).copy(),
+        }
+    else:
+        new_data["kkr_parameters"] = {
+            "lattice": {},
+            "calculation": {},
+            "output": {},
+            "go": {},
+            "line_indices": {},
+        }
+
+    # Update lattice parameters
+    if lattice:
+        for key, value in lattice.items():
+            new_data["kkr_parameters"]["lattice"][key] = value
+
+    # Update calculation parameters
+    if calculation:
+        for key, value in calculation.items():
+            new_data["kkr_parameters"]["calculation"][key] = value
+
+    # Update output parameters
+    if output:
+        for key, value in output.items():
+            new_data["kkr_parameters"]["output"][key] = value
+
+    # Update go parameters
+    if go:
+        for key, value in go.items():
+            new_data["kkr_parameters"]["go"][key] = value
+
+    # Update header lines with new parameters
+    new_header = _rebuild_header_with_kkr_params(
+        input_data["header"],
+        new_data["kkr_parameters"],
+    )
+    new_data["header"] = new_header
+
+    return new_data
+
+
+def _rebuild_header_with_kkr_params(
+    header_lines: List[str],
+    kkr_params: Dict,
+) -> List[str]:
+    """
+    Rebuild header lines with updated KKR parameters.
+
+    Parameters
+    ----------
+    header_lines : list of str
+        Original header lines.
+    kkr_params : dict
+        KKR parameters containing lattice, calculation, output, go sections.
+
+    Returns
+    -------
+    list of str
+        Updated header lines.
+    """
+    new_lines = header_lines[:]
+    line_indices = kkr_params.get("line_indices", {})
+
+    # Update go line
+    if "go" in line_indices and kkr_params.get("go"):
+        idx = line_indices["go"]
+        if idx < len(new_lines):
+            go_params = kkr_params["go"]
+            command = go_params.get("command", "go")
+            pot_file = go_params.get("pot_file", "pot.dat")
+            new_lines[idx] = f"    {command}  {pot_file}\n"
+
+    # Update lattice line
+    if "lattice" in line_indices and kkr_params.get("lattice"):
+        idx = line_indices["lattice"]
+        if idx < len(new_lines):
+            lat = kkr_params["lattice"]
+            brvtyp = lat.get("brvtyp", "so")
+            a = lat.get("a", 1.0)
+            c_a = lat.get("c_a", 1.0)
+            b_a = lat.get("b_a", 1.0)
+            alpha = lat.get("alpha", 90.0)
+            beta = lat.get("beta", 90.0)
+            gamma = lat.get("gamma", 90.0)
+            new_lines[idx] = f"    {brvtyp}  {a}  {c_a}  {b_a}  {alpha}  {beta}  {gamma}\n"
+
+    # Update calculation line
+    if "calculation" in line_indices and kkr_params.get("calculation"):
+        idx = line_indices["calculation"]
+        if idx < len(new_lines):
+            calc = kkr_params["calculation"]
+            edelt = calc.get("edelt", 0.001)
+            ewidth = calc.get("ewidth", 2.0)
+            reltyp = calc.get("reltyp", "sra")
+            sdftyp = calc.get("sdftyp", "mjw")
+            magtyp = calc.get("magtyp", "mag")
+            record = calc.get("record", "init")
+            new_lines[idx] = f"    {edelt}  {ewidth}  {reltyp}  {sdftyp}  {magtyp}  {record}\n"
+
+    # Update output line
+    if "output" in line_indices and kkr_params.get("output"):
+        idx = line_indices["output"]
+        if idx < len(new_lines):
+            out = kkr_params["output"]
+            outtyp = out.get("outtyp", "update")
+            bzqlty = out.get("bzqlty", 6)
+            maxitr = out.get("maxitr", 200)
+            pmix = out.get("pmix", 0.02)
+            new_lines[idx] = f"    {outtyp}  {bzqlty}  {maxitr}  {pmix}\n"
+
+    return new_lines
 
 
 def parse_atomic_positions(
@@ -158,10 +434,32 @@ def parse_atom_type_definitions(
 
 
 def load_input_file(input_path: Union[str, Path]) -> Dict:
-    """Load AkaiKKR input file and return structured data."""
+    """
+    Load AkaiKKR input file and return structured data.
+
+    Parameters
+    ----------
+    input_path : str or Path
+        Path to the AkaiKKR input file.
+
+    Returns
+    -------
+    dict
+        Structured data containing:
+        - header: list of header lines
+        - ntyp: number of atom types
+        - atom_type_definitions: list of atom type definitions
+        - atomic_header: header lines for atomic positions section
+        - atomic_positions: list of (x, y, z, atmtyp) tuples
+        - footer: list of footer lines
+        - kkr_parameters: dict with lattice, calculation, output, go parameters
+    """
     input_path = Path(input_path)
     with open(input_path, "r", encoding="utf-8") as fp:
         lines = fp.readlines()
+
+    # Parse KKR parameters from header
+    kkr_parameters = parse_kkr_parameters(lines)
 
     ntyp, atom_type_definitions, ntyp_start_idx = parse_atom_type_definitions(lines)
     if ntyp is None:
@@ -198,12 +496,13 @@ def load_input_file(input_path: Union[str, Path]) -> Dict:
         "atomic_header": atomic_header,
         "atomic_positions": atomic_positions,
         "footer": footer,
+        "kkr_parameters": kkr_parameters,
     }
 
 
 def _copy_base(input_data: Dict) -> Dict:
     """Return a shallow copy of the structured data."""
-    return {
+    result = {
         "header": input_data["header"][:],
         "ntyp": input_data.get("ntyp", 0),
         "atom_type_definitions": [
@@ -213,6 +512,16 @@ def _copy_base(input_data: Dict) -> Dict:
         "atomic_positions": input_data["atomic_positions"][:],
         "footer": input_data["footer"][:],
     }
+    # Copy KKR parameters if present
+    if "kkr_parameters" in input_data:
+        result["kkr_parameters"] = {
+            "lattice": input_data["kkr_parameters"].get("lattice", {}).copy(),
+            "calculation": input_data["kkr_parameters"].get("calculation", {}).copy(),
+            "output": input_data["kkr_parameters"].get("output", {}).copy(),
+            "go": input_data["kkr_parameters"].get("go", {}).copy(),
+            "line_indices": input_data["kkr_parameters"].get("line_indices", {}).copy(),
+        }
+    return result
 
 
 def replace_atom_types(input_data: Dict, atom_type_mapping: Dict[int, str]) -> Dict:
@@ -385,3 +694,95 @@ def list_atomic_positions(input_data: Union[Dict, str, Path]) -> None:
     print(f"Found {len(input_data['atomic_positions'])} atomic positions:")
     for idx, (x, y, z, atmtyp) in enumerate(input_data["atomic_positions"]):
         print(f"Index {idx}: ({x}, {y}, {z}) -> {atmtyp}")
+
+
+def apply_kkr_parameters_from_config(
+    input_data: Dict,
+    config: Dict,
+) -> Dict:
+    """
+    Apply KKR parameters from a TOML configuration to structured input data.
+
+    This function reads the [kkr] section from a configuration dictionary
+    and applies the parameters to the input data.
+
+    Parameters
+    ----------
+    input_data : dict
+        Structured data from load_input_file().
+    config : dict
+        Configuration dictionary (typically from TOML file) containing
+        an optional [kkr] section with lattice, calculation, output,
+        and go subsections.
+
+    Returns
+    -------
+    dict
+        New structured data with applied KKR parameters.
+
+    Examples
+    --------
+    TOML configuration example::
+
+        [kkr]
+        # Go command settings
+        [kkr.go]
+        command = "go"
+        pot_file = "pot.dat"
+
+        # Bravais lattice parameters
+        [kkr.lattice]
+        brvtyp = "so"
+        a = 7.265372455718975
+        c_a = 3.0753407056213957
+        b_a = 1.0211940276767721
+        alpha = 90.0
+        beta = 90.0
+        gamma = 90.0
+
+        # Calculation parameters
+        [kkr.calculation]
+        edelt = 0.001
+        ewidth = 2.0
+        reltyp = "sra"
+        sdftyp = "mjw"
+        magtyp = "mag"
+        record = "init"
+
+        # Output parameters
+        [kkr.output]
+        outtyp = "update"
+        bzqlty = 6
+        maxitr = 200
+        pmix = 0.02
+
+    Usage::
+
+        import tomllib
+        from odatse_kkr import load_input_file, apply_kkr_parameters_from_config
+
+        with open("config.toml", "rb") as f:
+            config = tomllib.load(f)
+
+        data = load_input_file("template.in")
+        data = apply_kkr_parameters_from_config(data, config)
+        write_input_file(data, "output.in")
+    """
+    kkr_config = config.get("kkr", {})
+
+    if not kkr_config:
+        # No KKR configuration, return unchanged
+        return input_data
+
+    lattice = kkr_config.get("lattice")
+    calculation = kkr_config.get("calculation")
+    output = kkr_config.get("output")
+    go = kkr_config.get("go")
+
+    return modify_kkr_parameters(
+        input_data,
+        lattice=lattice,
+        calculation=calculation,
+        output=output,
+        go=go,
+    )

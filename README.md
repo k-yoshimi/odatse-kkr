@@ -38,15 +38,116 @@ env = apply_tmp_env(tmp_dir, base_env=os.environ)
 run_command_template(command, work_dir=trial, input_path=input_in, output_path=output_out, env=env)
 ```
 
-Additional utilities:
+## KKR Parameters Configuration
+
+The package supports configuring AkaiKKR calculation parameters via TOML files.
+This allows you to define lattice parameters, calculation settings, and output
+options in your configuration file instead of hardcoding them in the template.
+
+### TOML Configuration
+
+Add a `[kkr]` section to your TOML configuration file:
+
+```toml
+[kkr]
+# Go command settings (optional)
+[kkr.go]
+command = "go"
+pot_file = "pot.dat"
+
+# Bravais lattice parameters (optional)
+[kkr.lattice]
+brvtyp = "so"          # Bravais lattice type
+a = 7.265372455718975  # Lattice constant a
+c_a = 3.0753407056213957  # c/a ratio
+b_a = 1.0211940276767721  # b/a ratio
+alpha = 90.0           # Angle alpha
+beta = 90.0            # Angle beta
+gamma = 90.0           # Angle gamma
+
+# Calculation parameters (optional)
+[kkr.calculation]
+edelt = 0.001          # Energy mesh width
+ewidth = 2.0           # Energy window width
+reltyp = "sra"         # Relativistic type
+sdftyp = "mjw"         # SDF type
+magtyp = "mag"         # Magnetic type
+record = "init"        # Record type
+
+# Output parameters (optional)
+[kkr.output]
+outtyp = "update"      # Output type
+bzqlty = 6             # BZ quality
+maxitr = 200           # Maximum iterations
+pmix = 0.02            # Mixing parameter
+```
+
+### Applying KKR Parameters
+
+Use `apply_kkr_parameters_from_config()` to apply TOML settings:
+
+```python
+import tomllib  # Python 3.11+ (use tomli for older versions)
+from odatse_kkr import (
+    load_input_file,
+    apply_kkr_parameters_from_config,
+    write_input_file,
+)
+
+# Load TOML configuration
+with open("config.toml", "rb") as f:
+    config = tomllib.load(f)
+
+# Load template and apply KKR parameters
+data = load_input_file("template.in")
+data = apply_kkr_parameters_from_config(data, config)
+write_input_file(data, "output.in")
+```
+
+### Partial Updates
+
+You don't need to specify all parameters. Only the parameters you include
+will be updated; others retain their original values from the template:
+
+```toml
+[kkr]
+# Only update lattice constant and mixing parameter
+[kkr.lattice]
+a = 8.0
+
+[kkr.output]
+pmix = 0.01
+```
+
+### Direct Modification
+
+For programmatic control, use `modify_kkr_parameters()` directly:
+
+```python
+from odatse_kkr import load_input_file, modify_kkr_parameters, write_input_file
+
+data = load_input_file("template.in")
+data = modify_kkr_parameters(
+    data,
+    lattice={"a": 8.0, "c_a": 3.2},
+    calculation={"edelt": 0.0005},
+    output={"maxitr": 500, "pmix": 0.01},
+)
+write_input_file(data, "output.in")
+```
+
+## Additional Utilities
 
 - `odatse_kkr.generate_input`: functions such as `load_input_file`, `add_atom_type_definition`,
-  `replace_atom_types_by_label`, and `write_input_file` (previously hosted in `odatse-specx`).
+  `replace_atom_types_by_label`, `parse_kkr_parameters`, `modify_kkr_parameters`, and `write_input_file`.
 - `odatse_kkr.MetricExtractor`: reusable parser for AkaiKKR metrics (total energy, band energy, etc.).
 
-Projects currently consuming this package:
+## Projects Using This Package
 
 - [odatse-cond](https://github.com/k-yoshimi/odatse-cond)
 - [odatse-specx](https://github.com/k-yoshimi/odatse-specx)
 - [odatse-osc](https://github.com/k-yoshimi/odatse-osc)
-*** End Patch***} to=functions.apply_patch codeinterpretable? error instructions? need plain patch. same as earlier but w ??? Actually tool expects plain string not JSON. Need re-send. 
+
+## License
+
+See [LICENSE](LICENSE) for details.
