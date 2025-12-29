@@ -9,7 +9,40 @@ import re
 from pathlib import Path
 from typing import Any, Dict
 
-__all__ = ["MetricExtractor"]
+__all__ = ["MetricExtractor", "check_convergence", "ConvergenceError"]
+
+
+class ConvergenceError(Exception):
+    """Raised when AkaiKKR calculation did not converge."""
+
+    pass
+
+
+def check_convergence(output_path: Path) -> bool:
+    """
+    Check if AkaiKKR calculation converged.
+
+    Parameters
+    ----------
+    output_path : Path
+        Path to the AkaiKKR output file.
+
+    Returns
+    -------
+    bool
+        True if converged, False if "no convergence" found.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the output file does not exist.
+    """
+    if not output_path.exists():
+        raise FileNotFoundError(f"{output_path} was not created by AkaiKKR.")
+
+    with output_path.open("r", encoding="utf-8", errors="ignore") as fp:
+        content = fp.read().lower()
+        return "no convergence" not in content
 
 
 DEFAULT_METRIC_PATTERNS = {

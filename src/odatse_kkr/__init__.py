@@ -45,7 +45,8 @@ from .generate_input import (  # noqa: F401
     replace_atom_types_by_label,
     write_input_file,
 )
-from .metrics import MetricExtractor  # noqa: F401
+from .metrics import MetricExtractor, check_convergence, ConvergenceError  # noqa: F401
+from .retry import RetryConfig, run_with_retry  # noqa: F401
 from .mpi import get_mpi_rank
 from .tmpenv import apply_tmp_env, ensure_tmp_subdir
 from .workdirs import (
@@ -56,15 +57,18 @@ from .workdirs import (
 )
 
 __all__ = [
+    "ConvergenceError",
+    "MetricExtractor",
+    "RetryConfig",
     "TrialDirectoryManager",
     "add_atom_type_definition",
     "apply_kkr_parameters_from_config",
     "apply_tmp_env",
     "as_command_list",
+    "check_convergence",
     "count_atoms_by_type",
     "ensure_tmp_subdir",
     "get_mpi_rank",
-    "MetricExtractor",
     "list_atomic_positions",
     "load_input_file",
     "modify_atom_type_definition",
@@ -77,5 +81,6 @@ __all__ = [
     "replace_atom_types_by_label",
     "resolve_root_dir",
     "run_command_template",
+    "run_with_retry",
     "write_input_file",
 ]

@@ -136,11 +136,84 @@ data = modify_kkr_parameters(
 write_input_file(data, "output.in")
 ```
 
+## Automatic Retry on Convergence Failure
+
+When AkaiKKR outputs "no convergence", the package can automatically retry
+the calculation with different `ewidth` values.
+
+### TOML Configuration
+
+Add a `[kkr.retry]` section to enable automatic retry:
+
+```toml
+[kkr.retry]
+# List of ewidth values to try sequentially
+# First value is used for initial calculation, subsequent values for retries
+ewidth_list = [2.0, 2.5, 3.0, 3.5]
+
+# Change record from "init" to "2nd" on retry (default: true)
+change_record_on_retry = true
+```
+
+### Using run_with_retry
+
+Use `run_with_retry()` instead of `run_command_template()` for automatic retry:
+
+```python
+from odatse_kkr import (
+    RetryConfig,
+    run_with_retry,
+    ConvergenceError,
+)
+
+# Create retry configuration
+retry_config = RetryConfig(ewidth_list=[2.0, 2.5, 3.0, 3.5])
+
+# Or load from TOML config
+retry_config = RetryConfig.from_config(config)
+
+try:
+    attempts = run_with_retry(
+        ["specx", "<", "{input}", ">", "{output}"],
+        input_path=input_path,
+        output_path=output_path,
+        work_dir=work_dir,
+        retry_config=retry_config,
+    )
+    print(f"Converged after {attempts} attempt(s)")
+except ConvergenceError as e:
+    print(f"Failed to converge: {e}")
+```
+
+### Retry Behavior
+
+1. Initial calculation runs with original `ewidth` from template
+2. If "no convergence" is detected in output:
+   - `ewidth` is changed to the next value in `ewidth_list`
+   - `record` is changed from `"init"` to `"2nd"` (if `change_record_on_retry=true`)
+   - Calculation is retried
+3. Process repeats until convergence or all values exhausted
+4. `ConvergenceError` is raised if all attempts fail
+
+### Checking Convergence
+
+You can also check convergence manually:
+
+```python
+from odatse_kkr import check_convergence
+
+if check_convergence(output_path):
+    print("Calculation converged")
+else:
+    print("No convergence detected")
+```
+
 ## Additional Utilities
 
 - `odatse_kkr.generate_input`: functions such as `load_input_file`, `add_atom_type_definition`,
   `replace_atom_types_by_label`, `parse_kkr_parameters`, `modify_kkr_parameters`, and `write_input_file`.
 - `odatse_kkr.MetricExtractor`: reusable parser for AkaiKKR metrics (total energy, band energy, etc.).
+- `odatse_kkr.retry`: automatic retry functionality with `RetryConfig`, `run_with_retry`, and `check_convergence`.
 
 ## Projects Using This Package
 
