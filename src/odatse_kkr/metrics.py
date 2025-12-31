@@ -9,11 +9,23 @@ import re
 from pathlib import Path
 from typing import Any, Dict
 
-__all__ = ["MetricExtractor", "check_convergence", "ConvergenceError"]
+__all__ = [
+    "MetricExtractor",
+    "check_convergence",
+    "check_nan_in_output",
+    "ConvergenceError",
+    "NaNError",
+]
 
 
 class ConvergenceError(Exception):
     """Raised when AkaiKKR calculation did not converge."""
+
+    pass
+
+
+class NaNError(Exception):
+    """Raised when AkaiKKR calculation produced NaN values."""
 
     pass
 
@@ -43,6 +55,59 @@ def check_convergence(output_path: Path) -> bool:
     with output_path.open("r", encoding="utf-8", errors="ignore") as fp:
         content = fp.read().lower()
         return "no convergence" not in content
+
+
+def check_nan_in_output(output_path: Path) -> bool:
+    """
+    Check if AkaiKKR output contains NaN values.
+
+    NaN can appear in total energy (te=) or other calculated values when
+    the calculation is corrupted, often due to reading a corrupted pot.dat file.
+
+    Parameters
+    ----------
+    output_path : Path
+        Path to the AkaiKKR output file.
+
+    Returns
+    -------
+    bool
+        True if no NaN found (output is valid), False if NaN found.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the output file does not exist.
+
+    Examples
+    --------
+    >>> if not check_nan_in_output(output_path):
+    ...     # Retry with init mode
+    ...     pass
+    """
+    if not output_path.exists():
+        raise FileNotFoundError(f"{output_path} was not created by AkaiKKR.")
+
+    # Patterns to check for NaN values
+    # - te= NaN (during iteration)
+    # - total energy= NaN (final result)
+    # - band energy= NaN (final result)
+    nan_patterns = [
+        r"te=\s*nan",
+        r"total energy=?\s*nan",
+        r"band energy=?\s*nan",
+        r"te=\s*-?nan",
+        r"total energy=?\s*-?nan",
+        r"band energy=?\s*-?nan",
+    ]
+
+    with output_path.open("r", encoding="utf-8", errors="ignore") as fp:
+        content = fp.read().lower()
+        for pattern in nan_patterns:
+            if re.search(pattern, content):
+                return False  # NaN found - output is invalid
+
+    return True  # No NaN found - output is valid
 
 
 DEFAULT_METRIC_PATTERNS = {

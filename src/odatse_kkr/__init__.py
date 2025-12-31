@@ -45,7 +45,13 @@ from .generate_input import (  # noqa: F401
     replace_atom_types_by_label,
     write_input_file,
 )
-from .metrics import MetricExtractor, check_convergence, ConvergenceError  # noqa: F401
+from .metrics import (  # noqa: F401
+    ConvergenceError,
+    MetricExtractor,
+    NaNError,
+    check_convergence,
+    check_nan_in_output,
+)
 from .retry import RetryConfig, run_with_retry  # noqa: F401
 from .mpi import get_mpi_rank
 from .tmpenv import apply_tmp_env, ensure_tmp_subdir
@@ -59,6 +65,7 @@ from .workdirs import (
 __all__ = [
     "ConvergenceError",
     "MetricExtractor",
+    "NaNError",
     "RetryConfig",
     "TrialDirectoryManager",
     "add_atom_type_definition",
@@ -66,6 +73,7 @@ __all__ = [
     "apply_tmp_env",
     "as_command_list",
     "check_convergence",
+    "check_nan_in_output",
     "count_atoms_by_type",
     "ensure_tmp_subdir",
     "get_mpi_rank",

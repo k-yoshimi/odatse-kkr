@@ -3,11 +3,15 @@ Retry utilities for AkaiKKR calculations with convergence failures.
 
 This module provides functionality to automatically retry AkaiKKR calculations
 when they fail to converge, by adjusting ewidth and record parameters.
+
+It also handles NaN detection - when a calculation produces NaN values
+(often due to corrupted pot.dat), it can restart from scratch with init mode.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
@@ -17,7 +21,7 @@ from .generate_input import (
     modify_kkr_parameters,
     write_input_file,
 )
-from .metrics import ConvergenceError, check_convergence
+from .metrics import ConvergenceError, NaNError, check_convergence, check_nan_in_output
 
 __all__ = [
     "RetryConfig",
@@ -29,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 class RetryConfig:
     """
-    Configuration for retry behavior on convergence failure.
+    Configuration for retry behavior on convergence failure or NaN detection.
 
     Parameters
     ----------
@@ -40,6 +44,10 @@ class RetryConfig:
         Maximum number of retry attempts. Defaults to len(ewidth_list) - 1.
     change_record_on_retry : bool, optional
         If True, change record from "init" to "2nd" on retry. Default is True.
+    retry_on_nan : bool, optional
+        If True, retry with init mode when NaN is detected. Default is True.
+        When NaN is detected, the pot.dat file is deleted and the calculation
+        restarts from scratch with record="init".
 
     Examples
     --------
@@ -48,6 +56,7 @@ class RetryConfig:
         [kkr.retry]
         ewidth_list = [2.0, 2.5, 3.0, 3.5]
         change_record_on_retry = true
+        retry_on_nan = true
 
     Usage::
 
@@ -66,6 +75,7 @@ class RetryConfig:
         ewidth_list: List[float],
         max_retries: Optional[int] = None,
         change_record_on_retry: bool = True,
+        retry_on_nan: bool = True,
     ):
         if not ewidth_list:
             raise ValueError("ewidth_list must contain at least one value")
@@ -75,6 +85,7 @@ class RetryConfig:
             max_retries if max_retries is not None else len(ewidth_list) - 1
         )
         self.change_record_on_retry = change_record_on_retry
+        self.retry_on_nan = retry_on_nan
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> Optional["RetryConfig"]:
@@ -108,6 +119,7 @@ class RetryConfig:
             ewidth_list=ewidth_list,
             max_retries=retry_config.get("max_retries"),
             change_record_on_retry=retry_config.get("change_record_on_retry", True),
+            retry_on_nan=retry_config.get("retry_on_nan", True),
         )
 
 
@@ -121,14 +133,22 @@ def run_with_retry(
     env: Optional[Mapping[str, str]] = None,
     timeout: Optional[float] = None,
     on_retry: Optional[Callable[[int, float], None]] = None,
+    on_nan_retry: Optional[Callable[[], None]] = None,
+    pot_file: str = "pot.dat",
 ) -> int:
     """
-    Run AkaiKKR command with automatic retry on convergence failure.
+    Run AkaiKKR command with automatic retry on convergence failure or NaN.
 
     When a calculation fails to converge (output contains "no convergence"),
     this function automatically modifies the input file with:
     - New ewidth value from the retry configuration
     - record changed from "init" to "2nd" (if change_record_on_retry is True)
+
+    When NaN is detected in the output (often due to corrupted pot.dat),
+    this function:
+    - Deletes the pot.dat file
+    - Changes record back to "init"
+    - Restarts the calculation from scratch
 
     Parameters
     ----------
@@ -148,6 +168,10 @@ def run_with_retry(
         Timeout in seconds for each command execution.
     on_retry : callable, optional
         Callback function called before each retry with (attempt_number, new_ewidth).
+    on_nan_retry : callable, optional
+        Callback function called before NaN retry (when restarting with init mode).
+    pot_file : str, optional
+        Name of the pot.dat file to delete on NaN retry. Default is "pot.dat".
 
     Returns
     -------
@@ -158,6 +182,8 @@ def run_with_retry(
     ------
     ConvergenceError
         If calculation fails to converge after all retry attempts.
+    NaNError
+        If calculation produces NaN even after retrying with init mode.
 
     Examples
     --------
@@ -181,7 +207,61 @@ def run_with_retry(
         timeout=timeout,
     )
 
-    if check_convergence(output_path):
+    # Check for NaN first (higher priority than convergence check)
+    nan_detected = not check_nan_in_output(output_path)
+
+    if nan_detected:
+        logger.warning(f"NaN detected in output: {output_path}")
+
+        # Handle NaN retry
+        if retry_config is not None and retry_config.retry_on_nan:
+            logger.info("Retrying with init mode due to NaN detection")
+
+            if on_nan_retry:
+                on_nan_retry()
+
+            # Delete pot.dat and retry with init mode
+            pot_path = work_dir / pot_file
+            if pot_path.exists():
+                logger.info(f"Deleting corrupted pot file: {pot_path}")
+                os.remove(pot_path)
+
+            # Modify input to use init mode
+            input_data = load_input_file(input_path)
+            new_data = modify_kkr_parameters(input_data, calculation={"record": "init"})
+            write_input_file(new_data, input_path)
+
+            # Run calculation again
+            run_command_template(
+                command_template,
+                work_dir=work_dir,
+                input_path=input_path,
+                output_path=output_path,
+                env=env,
+                timeout=timeout,
+            )
+
+            # Check for NaN again
+            if not check_nan_in_output(output_path):
+                raise NaNError(
+                    f"Calculation produced NaN even after retrying with init mode. "
+                    f"Output: {output_path}"
+                )
+
+            # Check convergence after NaN retry
+            if check_convergence(output_path):
+                return 2  # Success after NaN retry
+
+            # Continue with normal convergence retry if needed
+            logger.info("Continuing with convergence retry after NaN retry")
+        else:
+            raise NaNError(
+                f"Calculation produced NaN values. "
+                f"Enable retry_on_nan to automatically restart with init mode. "
+                f"Output: {output_path}"
+            )
+
+    elif check_convergence(output_path):
         return 1
 
     # No retry config - raise error immediately
@@ -223,6 +303,44 @@ def run_with_retry(
             env=env,
             timeout=timeout,
         )
+
+        # Check for NaN
+        if not check_nan_in_output(output_path):
+            # NaN detected during retry - switch to init mode
+            if retry_config.retry_on_nan:
+                logger.warning(
+                    f"NaN detected during retry {attempt}, switching to init mode"
+                )
+
+                if on_nan_retry:
+                    on_nan_retry()
+
+                pot_path = work_dir / pot_file
+                if pot_path.exists():
+                    logger.info(f"Deleting corrupted pot file: {pot_path}")
+                    os.remove(pot_path)
+
+                input_data = load_input_file(input_path)
+                new_data = modify_kkr_parameters(
+                    input_data,
+                    calculation={"record": "init", "ewidth": new_ewidth},
+                )
+                write_input_file(new_data, input_path)
+
+                run_command_template(
+                    command_template,
+                    work_dir=work_dir,
+                    input_path=input_path,
+                    output_path=output_path,
+                    env=env,
+                    timeout=timeout,
+                )
+
+                if not check_nan_in_output(output_path):
+                    raise NaNError(
+                        f"Calculation produced NaN even after retrying with init mode. "
+                        f"Output: {output_path}"
+                    )
 
         if check_convergence(output_path):
             return attempt + 1
