@@ -451,7 +451,7 @@ class TestRunWithRetryNaN:
         tmp_path,
     ):
         """Test that NaN triggers retry with init mode."""
-        # First run: NaN detected, second run: success
+        # First run: NaN detected, second run (init mode with first ewidth): success
         mock_check_nan.side_effect = [False, True]  # False = NaN found
         mock_check_convergence.return_value = True
         mock_load.return_value = {
@@ -489,6 +489,58 @@ class TestRunWithRetryNaN:
 
         assert attempts == 2
         assert not pot_path.exists()  # pot.dat should be deleted
+
+    @patch("odatse_kkr.retry.run_command_template")
+    @patch("odatse_kkr.retry.check_nan_in_output")
+    @patch("odatse_kkr.retry.check_convergence")
+    @patch("odatse_kkr.retry.load_input_file")
+    @patch("odatse_kkr.retry.write_input_file")
+    def test_nan_retry_with_different_ewidth(
+        self,
+        mock_write,
+        mock_load,
+        mock_check_convergence,
+        mock_check_nan,
+        mock_run_command,
+        tmp_path,
+    ):
+        """Test that NaN retries with different ewidth values."""
+        # First run: NaN, second (init ewidth=2.0): NaN, third (init ewidth=2.5): success
+        mock_check_nan.side_effect = [False, False, True]  # NaN, NaN, OK
+        mock_check_convergence.return_value = True
+        mock_load.return_value = {
+            "header": [],
+            "ntyp": 0,
+            "atom_type_definitions": [],
+            "atomic_header": [],
+            "atomic_positions": [],
+            "footer": [],
+            "kkr_parameters": {
+                "lattice": {},
+                "calculation": {"ewidth": 2.0, "record": "2nd"},
+                "output": {},
+                "go": {"pot_file": "pot.dat"},
+                "line_indices": {},
+            },
+        }
+
+        input_path = tmp_path / "test.in"
+        output_path = tmp_path / "test.out"
+        input_path.touch()
+        output_path.touch()
+
+        retry_config = RetryConfig(ewidth_list=[2.0, 2.5, 3.0], retry_on_nan=True)
+
+        attempts = run_with_retry(
+            ["specx"],
+            input_path=input_path,
+            output_path=output_path,
+            work_dir=tmp_path,
+            retry_config=retry_config,
+        )
+
+        # First attempt + init retry with ewidth=2.0 (NaN) + init retry with ewidth=2.5 (OK)
+        assert attempts == 3
 
     @patch("odatse_kkr.retry.run_command_template")
     @patch("odatse_kkr.retry.check_nan_in_output")
@@ -606,8 +658,8 @@ class TestRunWithRetryNaN:
         mock_run_command,
         tmp_path,
     ):
-        """Test that persistent NaN raises NaNError even after retry."""
-        # NaN persists even after init mode retry
+        """Test that persistent NaN raises NaNError after trying all ewidth values."""
+        # NaN persists even after trying all ewidth values
         mock_check_nan.return_value = False  # NaN always found
         mock_load.return_value = {
             "header": [],
@@ -632,7 +684,7 @@ class TestRunWithRetryNaN:
 
         retry_config = RetryConfig(ewidth_list=[2.0, 2.5], retry_on_nan=True)
 
-        with pytest.raises(NaNError, match="even after retrying with init mode"):
+        with pytest.raises(NaNError, match="NaN with all ewidth values"):
             run_with_retry(
                 ["specx"],
                 input_path=input_path,

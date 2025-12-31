@@ -207,31 +207,61 @@ def run_with_retry(
         timeout=timeout,
     )
 
-    # Check for NaN first (higher priority than convergence check)
-    nan_detected = not check_nan_in_output(output_path)
+    # Helper function to run with init mode and try different ewidth values on NaN
+    def _retry_with_init_and_ewidth(
+        start_ewidth_index: int,
+        reason: str,
+    ) -> int:
+        """
+        Retry calculation with init mode, trying different ewidth values if NaN persists.
 
-    if nan_detected:
-        logger.warning(f"NaN detected in output: {output_path}")
+        Parameters
+        ----------
+        start_ewidth_index : int
+            Starting index in ewidth_list to try.
+        reason : str
+            Reason for retry (for logging).
 
-        # Handle NaN retry
-        if retry_config is not None and retry_config.retry_on_nan:
-            logger.info("Retrying with init mode due to NaN detection")
+        Returns
+        -------
+        int
+            Number of attempts made if successful.
+
+        Raises
+        ------
+        NaNError
+            If all ewidth values produce NaN.
+        ConvergenceError
+            If calculation doesn't converge after all retries.
+        """
+        max_ewidth_attempts = len(retry_config.ewidth_list)
+
+        for ewidth_idx in range(start_ewidth_index, max_ewidth_attempts):
+            new_ewidth = retry_config.ewidth_list[ewidth_idx]
+
+            logger.info(
+                f"{reason}: trying init mode with ewidth={new_ewidth} "
+                f"(attempt {ewidth_idx + 1}/{max_ewidth_attempts})"
+            )
 
             if on_nan_retry:
                 on_nan_retry()
 
-            # Delete pot.dat and retry with init mode
+            # Delete pot.dat
             pot_path = work_dir / pot_file
             if pot_path.exists():
                 logger.info(f"Deleting corrupted pot file: {pot_path}")
                 os.remove(pot_path)
 
-            # Modify input to use init mode
+            # Modify input to use init mode with new ewidth
             input_data = load_input_file(input_path)
-            new_data = modify_kkr_parameters(input_data, calculation={"record": "init"})
+            new_data = modify_kkr_parameters(
+                input_data,
+                calculation={"record": "init", "ewidth": new_ewidth},
+            )
             write_input_file(new_data, input_path)
 
-            # Run calculation again
+            # Run calculation
             run_command_template(
                 command_template,
                 work_dir=work_dir,
@@ -241,19 +271,46 @@ def run_with_retry(
                 timeout=timeout,
             )
 
-            # Check for NaN again
-            if not check_nan_in_output(output_path):
-                raise NaNError(
-                    f"Calculation produced NaN even after retrying with init mode. "
-                    f"Output: {output_path}"
+            # Check for NaN
+            if check_nan_in_output(output_path):
+                # No NaN - check convergence
+                if check_convergence(output_path):
+                    return ewidth_idx + 2  # +2 because first attempt was 1
+                else:
+                    # No NaN but not converged - continue with normal retry from here
+                    logger.info(
+                        f"No NaN with ewidth={new_ewidth}, but not converged. "
+                        f"Continuing with convergence retry."
+                    )
+                    # Return negative to indicate we should continue with convergence retry
+                    return -(ewidth_idx + 1)
+            else:
+                # Still NaN - try next ewidth
+                logger.warning(
+                    f"Still NaN with ewidth={new_ewidth}, trying next ewidth"
                 )
+                continue
 
-            # Check convergence after NaN retry
-            if check_convergence(output_path):
-                return 2  # Success after NaN retry
+        # All ewidth values produced NaN
+        raise NaNError(
+            f"Calculation produced NaN with all ewidth values: "
+            f"{retry_config.ewidth_list}. Output: {output_path}"
+        )
 
-            # Continue with normal convergence retry if needed
-            logger.info("Continuing with convergence retry after NaN retry")
+    # Check for NaN first (higher priority than convergence check)
+    nan_detected = not check_nan_in_output(output_path)
+
+    if nan_detected:
+        logger.warning(f"NaN detected in output: {output_path}")
+
+        # Handle NaN retry
+        if retry_config is not None and retry_config.retry_on_nan:
+            result = _retry_with_init_and_ewidth(0, "NaN detected on first attempt")
+            if result > 0:
+                return result
+            # result < 0 means we should continue with convergence retry
+            # The ewidth index to continue from is -result - 1
+            start_retry_index = -result
         else:
             raise NaNError(
                 f"Calculation produced NaN values. "
@@ -263,6 +320,8 @@ def run_with_retry(
 
     elif check_convergence(output_path):
         return 1
+    else:
+        start_retry_index = 1  # Start from second ewidth value
 
     # No retry config - raise error immediately
     if retry_config is None:
@@ -273,7 +332,7 @@ def run_with_retry(
     # Retry with different ewidth values
     max_attempts = min(retry_config.max_retries + 1, len(retry_config.ewidth_list))
 
-    for attempt in range(1, max_attempts):
+    for attempt in range(start_retry_index, max_attempts):
         new_ewidth = retry_config.ewidth_list[attempt]
 
         logger.info(
@@ -306,41 +365,18 @@ def run_with_retry(
 
         # Check for NaN
         if not check_nan_in_output(output_path):
-            # NaN detected during retry - switch to init mode
+            # NaN detected during retry - switch to init mode with different ewidths
             if retry_config.retry_on_nan:
                 logger.warning(
                     f"NaN detected during retry {attempt}, switching to init mode"
                 )
-
-                if on_nan_retry:
-                    on_nan_retry()
-
-                pot_path = work_dir / pot_file
-                if pot_path.exists():
-                    logger.info(f"Deleting corrupted pot file: {pot_path}")
-                    os.remove(pot_path)
-
-                input_data = load_input_file(input_path)
-                new_data = modify_kkr_parameters(
-                    input_data,
-                    calculation={"record": "init", "ewidth": new_ewidth},
+                result = _retry_with_init_and_ewidth(
+                    attempt, f"NaN detected during retry {attempt}"
                 )
-                write_input_file(new_data, input_path)
-
-                run_command_template(
-                    command_template,
-                    work_dir=work_dir,
-                    input_path=input_path,
-                    output_path=output_path,
-                    env=env,
-                    timeout=timeout,
-                )
-
-                if not check_nan_in_output(output_path):
-                    raise NaNError(
-                        f"Calculation produced NaN even after retrying with init mode. "
-                        f"Output: {output_path}"
-                    )
+                if result > 0:
+                    return result
+                # Continue with next ewidth if result < 0
+                continue
 
         if check_convergence(output_path):
             return attempt + 1
