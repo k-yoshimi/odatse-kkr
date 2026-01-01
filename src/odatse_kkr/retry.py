@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from .commands import run_command_template
 from .generate_input import (
@@ -135,7 +135,7 @@ def run_with_retry(
     on_retry: Optional[Callable[[int, float], None]] = None,
     on_nan_retry: Optional[Callable[[], None]] = None,
     pot_file: str = "pot.dat",
-) -> int:
+) -> Tuple[int, Optional[float]]:
     """
     Run AkaiKKR command with automatic retry on convergence failure or NaN.
 
@@ -175,8 +175,12 @@ def run_with_retry(
 
     Returns
     -------
-    int
-        Number of attempts made (1 = success on first try, 2+ = retries needed).
+    Tuple[int, Optional[float]]
+        A tuple of (attempts, final_ewidth) where:
+        - attempts: Number of attempts made (1 = success on first try, 2+ = retries).
+        - final_ewidth: The ewidth value used for the successful calculation.
+          None if succeeded on first try (template ewidth was used),
+          otherwise the ewidth value from retry_config.ewidth_list.
 
     Raises
     ------
@@ -188,14 +192,14 @@ def run_with_retry(
     Examples
     --------
     >>> retry_config = RetryConfig(ewidth_list=[2.0, 2.5, 3.0])
-    >>> attempts = run_with_retry(
+    >>> attempts, final_ewidth = run_with_retry(
     ...     ["specx", "<", "{input}", ">", "{output}"],
     ...     input_path=Path("test.in"),
     ...     output_path=Path("test.out"),
     ...     work_dir=Path("."),
     ...     retry_config=retry_config,
     ... )
-    >>> print(f"Converged after {attempts} attempt(s)")
+    >>> print(f"Converged after {attempts} attempt(s) with ewidth={final_ewidth}")
     """
     # First attempt
     run_command_template(
@@ -211,7 +215,7 @@ def run_with_retry(
     def _retry_with_init_and_ewidth(
         start_ewidth_index: int,
         reason: str,
-    ) -> int:
+    ) -> Union[Tuple[int, float], int]:
         """
         Retry calculation with init mode, trying different ewidth values if NaN persists.
 
@@ -224,8 +228,10 @@ def run_with_retry(
 
         Returns
         -------
-        int
-            Number of attempts made if successful.
+        Union[Tuple[int, float], int]
+            If successful: (attempts, final_ewidth) tuple.
+            If not converged but should continue: negative int indicating
+            the ewidth index to continue from (-result - 1).
 
         Raises
         ------
@@ -275,7 +281,8 @@ def run_with_retry(
             if check_nan_in_output(output_path):
                 # No NaN - check convergence
                 if check_convergence(output_path):
-                    return ewidth_idx + 2  # +2 because first attempt was 1
+                    # +2 because first attempt was 1
+                    return (ewidth_idx + 2, new_ewidth)
                 else:
                     # No NaN but not converged - continue with normal retry from here
                     logger.info(
@@ -306,7 +313,8 @@ def run_with_retry(
         # Handle NaN retry
         if retry_config is not None and retry_config.retry_on_nan:
             result = _retry_with_init_and_ewidth(0, "NaN detected on first attempt")
-            if result > 0:
+            if isinstance(result, tuple):
+                # Success - return (attempts, final_ewidth)
                 return result
             # result < 0 means we should continue with convergence retry
             # The ewidth index to continue from is -result - 1
@@ -319,7 +327,8 @@ def run_with_retry(
             )
 
     elif check_convergence(output_path):
-        return 1
+        # Success on first try - template ewidth was used
+        return (1, None)
     else:
         start_retry_index = 1  # Start from second ewidth value
 
@@ -373,13 +382,15 @@ def run_with_retry(
                 result = _retry_with_init_and_ewidth(
                     attempt, f"NaN detected during retry {attempt}"
                 )
-                if result > 0:
+                if isinstance(result, tuple):
+                    # Success - return (attempts, final_ewidth)
                     return result
                 # Continue with next ewidth if result < 0
                 continue
 
         if check_convergence(output_path):
-            return attempt + 1
+            # Success after retry - return the ewidth that worked
+            return (attempt + 1, new_ewidth)
 
     # All retries exhausted
     raise ConvergenceError(
