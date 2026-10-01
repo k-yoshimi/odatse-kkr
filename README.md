@@ -217,9 +217,9 @@ else:
 
 ## Projects Using This Package
 
-- [odatse-cond](https://github.com/k-yoshimi/odatse-cond)
+- odatse-cond (not yet public)
 - [odatse-specx](https://github.com/k-yoshimi/odatse-specx)
-- [odatse-osc](https://github.com/k-yoshimi/odatse-osc)
+- odatse-osc (not yet public)
 
 ## License
 
